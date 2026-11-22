@@ -1,0 +1,491 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>人气投票 · 票数监控</title>
+<style>
+  :root{
+    --bg:#f5f6f8; --card:#fff; --line:#e5e7eb; --ink:#181b21; --ink2:#5f6673; --ink3:#9aa1ad;
+    --p1:#e05a3a; --p2:#e8a020; --p3:#3b82f6; --p4:#12a07a; --tot:#8b5cf6; --other:#c2c8d2;
+    --up:#d92b2b; --flat:#9aa1ad;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font:14px/1.5 -apple-system,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;
+    -webkit-font-smoothing:antialiased}
+  .wrap{max-width:1240px;margin:0 auto;padding:20px 18px 40px}
+
+  header{display:flex;align-items:baseline;gap:14px;flex-wrap:wrap;margin-bottom:16px}
+  h1{font-size:19px;font-weight:650;margin:0;letter-spacing:-.2px}
+  .sub{color:var(--ink3);font-size:12.5px}
+  .live{margin-left:auto;display:flex;align-items:center;gap:7px;font-size:12px;color:var(--ink2)}
+  .dot{width:7px;height:7px;border-radius:50%;background:var(--p4);box-shadow:0 0 0 0 rgba(18,160,122,.5);
+    animation:pulse 2s infinite}
+  .dot.off{background:var(--ink3);animation:none}
+  @keyframes pulse{0%{box-shadow:0 0 0 0 rgba(18,160,122,.45)}70%{box-shadow:0 0 0 7px rgba(18,160,122,0)}100%{box-shadow:0 0 0 0 rgba(18,160,122,0)}}
+
+  .cards{display:grid;grid-template-columns:repeat(5,1fr);gap:10px;margin-bottom:14px}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:12px 13px;
+    position:relative;overflow:hidden}
+  .card::before{content:"";position:absolute;left:0;top:0;bottom:0;width:3px;background:var(--c,var(--ink3))}
+  .cname{font-size:12px;color:var(--ink2);margin-bottom:5px;display:flex;align-items:center;gap:5px}
+  .cval{font-size:20px;font-weight:640;letter-spacing:-.5px;font-variant-numeric:tabular-nums}
+  .cdelta{font-size:12px;margin-top:3px;font-variant-numeric:tabular-nums;color:var(--up)}
+  .cdelta.zero{color:var(--flat)}
+
+  .panel{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px 16px 10px;margin-bottom:14px}
+  .ptitle{display:flex;align-items:baseline;gap:10px;margin-bottom:10px;flex-wrap:wrap}
+  .ptitle b{font-size:14px;font-weight:620}
+  .ptitle span{font-size:12px;color:var(--ink3)}
+  .legend{display:flex;gap:14px;margin-bottom:10px;flex-wrap:wrap;font-size:12px;color:var(--ink2)}
+  .lg{display:flex;align-items:center;gap:5px}
+  .sw{width:9px;height:9px;border-radius:2px}
+  canvas{width:100%;max-width:100%;display:block}
+  /* canvas 的 width 属性是物理像素（W×dpr），会被当成 min-content 宽度，
+     在 grid/flex 里把容器顶宽 —— 手机上表现为整页右半边被切掉 */
+  .grid2 > *{min-width:0}
+
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:14px;align-items:start}
+  .grid2.pie{grid-template-columns:.78fr 1.22fr}
+
+  .piebox{display:flex;gap:18px;align-items:center;flex-wrap:wrap;padding:4px 0 8px}
+  .piebox canvas{flex:0 0 auto}
+  .plist{flex:1;min-width:190px;display:flex;flex-direction:column;gap:7px}
+  .prow{display:flex;align-items:center;gap:9px;font-size:12.5px}
+  .prow .nm{flex:0 0 72px;color:var(--ink2)}
+  .prow .bar{flex:1;height:7px;border-radius:4px;background:#f0f2f5;overflow:hidden}
+  .prow .bar i{display:block;height:100%;border-radius:4px}
+  .prow .pv{flex:0 0 62px;text-align:right;font-variant-numeric:tabular-nums;font-weight:600}
+  .prow .pp{flex:0 0 52px;text-align:right;font-variant-numeric:tabular-nums;color:var(--ink3)}
+
+  table{width:100%;border-collapse:collapse;font-size:12.5px;font-variant-numeric:tabular-nums}
+  th{text-align:right;color:var(--ink3);font-weight:500;padding:6px 7px;border-bottom:1px solid var(--line);white-space:nowrap}
+  th:first-child{text-align:left}
+  td{text-align:right;padding:6px 7px;border-bottom:1px solid #f1f2f4}
+  td:first-child{text-align:left;color:var(--ink2)}
+  tbody tr:hover{background:#fafbfc}
+  .scroll{max-height:300px;overflow:auto}
+  .empty{color:var(--ink3);text-align:center;padding:40px 0;font-size:13px}
+  @media(max-width:980px){
+    body{overflow-x:hidden}
+    .cards{grid-template-columns:repeat(2,1fr)}
+    .grid2,.grid2.pie{grid-template-columns:1fr}
+    /* 手机上圆环 + 明细的横向最小宽度会撑破页面，导致整页右半边被切掉 */
+    .wrap{padding:14px 12px 32px}
+    .piebox{gap:12px}
+    .plist{min-width:0}
+    .prow .nm{flex:0 0 60px}
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>巅峰挑战赛人气投票 · 票数监控</h1>
+    <span class="sub" id="meta">—</span>
+    <div class="live"><span class="dot off" id="dot"></span><span id="liveTxt">等待数据</span></div>
+  </header>
+
+  <div class="cards" id="cards"></div>
+
+  <div class="grid2">
+    <div class="panel">
+      <div class="ptitle"><b>总票数走势</b><span>相对首次采样的累计涨量</span></div>
+      <div class="legend" id="legend"></div>
+      <canvas id="line"></canvas>
+    </div>
+    <div class="panel">
+      <div class="ptitle"><b>每分钟涨幅</b><span>相邻两次采样的差值，按实际间隔折算到每分钟</span></div>
+      <div class="legend" id="legend2"></div>
+      <canvas id="gain"></canvas>
+    </div>
+  </div>
+
+  <div class="grid2 pie">
+    <div class="panel">
+      <div class="ptitle"><b>票数构成</b><span>各自占总票数的比例</span></div>
+      <div class="piebox">
+        <canvas id="pie"></canvas>
+        <div class="plist" id="plist"></div>
+      </div>
+    </div>
+    <div class="panel">
+      <div class="ptitle"><b>每轮明细</b><span>最近 40 次采样，折算成每分钟各选手涨多少</span></div>
+      <div class="scroll">
+        <table>
+          <thead><tr><th>时间</th><th>Δ总</th><th>白小纯</th><th>青稚</th><th>Paraboy</th><th>33Svan</th></tr></thead>
+          <tbody id="tbody"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+const SERIES = [
+  {key:'r1l', name:'白小纯', c:'#e05a3a'},
+  {key:'r1r', name:'青稚',   c:'#e8a020'},
+  {key:'r2l', name:'Paraboy',c:'#3b82f6'},
+  {key:'r2r', name:'33Svan', c:'#12a07a'},
+  {key:'total', name:'总票数', c:'#8b5cf6'},
+];
+const PKEYS = ['r1l','r1r','r2l','r2r'];
+const OTHER_C = '#c2c8d2';
+let DATA = [];
+
+const fmt = n => n==null ? '—' : n.toLocaleString('en-US');
+const pct = v => v==null ? '—' : v.toFixed(2)+'%';
+// 中文习惯的万单位，用于圆环中心
+const wan = n => n==null ? '—' : (n/10000).toFixed(1)+'万';
+
+function parseCSV(text){
+  const lines = text.replace(/^\uFEFF/,'').trim().split(/\r?\n/);
+  if(lines.length < 2) return [];
+  return lines.slice(1).map(l=>{
+    const c = l.split(',');
+    const num = x => { const v = parseInt(String(x).replace(/[^\d-]/g,'')); return isNaN(v)?null:v; };
+    return {
+      t: c[0], total:num(c[1]), r1l:num(c[2]), r1r:num(c[3]), r2l:num(c[4]), r2r:num(c[5]),
+    };
+  }).filter(r=>r.total!=null);
+}
+
+// Y 轴：在若干「段数 × 步长」组合里挑一个上界最贴近数据的，避免一半画布是空白
+function niceAxis(v){
+  if(!(v>0)) return {hi:1000, step:200, div:5};
+  const mults = [1,1.2,1.5,2,2.5,3,4,5,6,8,10];
+  let best = null;
+  for(const div of [5,4,6,8]){
+    const baseExp = Math.floor(Math.log10(v/div));
+    for(const e of [baseExp-1, baseExp, baseExp+1]){
+      for(const m of mults){
+        const step = m*Math.pow(10,e), hi = step*div;
+        if(hi < v*1.02) continue;
+        const waste = hi/v;
+        if(!best || waste < best.waste) best = {hi, step, div, waste};
+      }
+    }
+  }
+  return best || {hi:v, step:v/5, div:5};
+}
+
+// 刻度值：过百万用 M，过千用 k
+function tickLabel(v){
+  if(v >= 1e6){ const x = v/1e6; return (x%1 ? x.toFixed(1) : x) + 'M'; }
+  if(v >= 1000){ const x = v/1000; return (x%1 ? x.toFixed(1) : x) + 'k'; }
+  return String(Math.round(v));
+}
+
+// 横轴标签：跨度小于 40 分钟时精确到秒，否则只到分
+function axisLabel(t){
+  const span = DATA.length>1
+    ? (new Date(DATA[DATA.length-1].t.replace(/-/g,'/')) - new Date(DATA[0].t.replace(/-/g,'/')))
+    : 0;
+  return span < 40*60*1000 ? String(t).slice(11,19) : String(t).slice(11,16);
+}
+
+// 最多显示 n 个刻度，避免标签互相压住
+function pickIdx(len, n){
+  if(len<=n) return new Set([...Array(len).keys()]);
+  const out = new Set();
+  for(let i=0;i<n;i++) out.add(Math.round(i*(len-1)/(n-1)));
+  return out;
+}
+
+function setup(cv, H){
+  const dpr = window.devicePixelRatio||1;
+  const W = cv.clientWidth || cv.parentElement.clientWidth;
+  cv.style.height = H+'px';
+  cv.width = W*dpr; cv.height = H*dpr;
+  const g = cv.getContext('2d');
+  g.setTransform(1,0,0,1,0,0);
+  g.scale(dpr,dpr); g.clearRect(0,0,W,H);
+  return {g, W, H};
+}
+
+function hint(g, W, H, text){
+  g.fillStyle='#9aa1ad'; g.font='13px sans-serif'; g.textAlign='center';
+  g.fillText(text, W/2, H/2);
+}
+
+// 画网格 + 坐标映射。ax = {hi, step, div}
+function drawSeries(g, W, H, pad, xs, ax){
+  const ih = H-pad.t-pad.b, iw = W-pad.l-pad.r;
+  const X = i => pad.l + (xs.length===1 ? iw/2 : xs[i]/Math.max(xs[xs.length-1],1)*iw);
+  const Y = v => pad.t + ih - v/ax.hi*ih;
+
+  g.strokeStyle='#eef0f3'; g.lineWidth=1;
+  g.font='11px ui-monospace,monospace'; g.fillStyle='#9aa1ad'; g.textAlign='right';
+  for(let i=0;i<=ax.div;i++){
+    const v = ax.step*i, y = Y(v);
+    g.beginPath(); g.moveTo(pad.l,y); g.lineTo(W-pad.r,y); g.stroke();
+    g.fillText(tickLabel(v), pad.l-8, y+4);
+  }
+  return {X, Y};
+}
+
+function drawLine(cv){
+  const {g, W, H} = setup(cv, 300);
+  const pad = {l:62,r:14,t:12,b:26};
+  if(DATA.length < 2){ hint(g,W,H,'至少需要 2 次采样才能画曲线，等下一轮…'); return; }
+
+  // 画的是相对首次采样的涨量，不是绝对票数 —— 500 万基数上看不出几千的变化
+  const base = DATA[0];
+  const keys = ['r1l','r1r','r2l','r2r','total'];
+  const delta = (r,k) => (r[k]==null||base[k]==null) ? null : r[k]-base[k];
+
+  let hi = 0;
+  DATA.forEach(r=>keys.forEach(k=>{ const d=delta(r,k); if(d!=null) hi=Math.max(hi,d); }));
+  const ax = niceAxis(Math.max(hi*1.06, 1000));
+
+  const xs = DATA.map((_,i)=>i);
+  const {X, Y} = drawSeries(g, W, H, pad, xs, ax);
+
+  // 横轴
+  g.textAlign='center';
+  const show = pickIdx(DATA.length, Math.max(3, Math.min(6, Math.floor(W/120))));
+  const idxs = [...show].sort((a,b)=>a-b);
+  idxs.forEach((i,pos)=>{ g.textAlign = pos===0?'left' : pos===idxs.length-1?'right':'center';
+    g.fillText(axisLabel(DATA[i].t), X(i), H-8); });
+  g.textAlign='center';
+
+  keys.forEach(k=>{
+    const s = SERIES.find(x=>x.key===k);
+    const isTotal = k==='total';
+    g.beginPath(); g.strokeStyle=s.c; g.lineWidth=isTotal?1.4:2; g.lineJoin='round';
+    if(isTotal){ g.setLineDash([4,4]); g.globalAlpha=.6; }
+    let started=false;
+    DATA.forEach((r,i)=>{ const v=delta(r,k); if(v==null) return;
+      const x=X(i), y=Y(v);
+      started ? g.lineTo(x,y) : (g.moveTo(x,y), started=true);
+    });
+    g.stroke(); g.setLineDash([]); g.globalAlpha=1;
+    const li = [...DATA].map((r,i)=>({i,v:delta(r,k)})).filter(o=>o.v!=null).pop();
+    if(li){ g.beginPath(); g.arc(X(li.i),Y(li.v),3.2,0,7); g.fillStyle=s.c; g.fill();
+      g.strokeStyle='#fff'; g.lineWidth=1.5; g.stroke(); }
+  });
+}
+
+// 相邻两次采样的差值，按实际间隔折算成「每分钟涨多少」
+// 直接看差值会被长间隔（电脑休眠、采集中断）带偏，折算后各点可比
+function gains(){
+  const out = [];
+  // 每列各自记住「上一个有效读数」。某轮某位选手没读到时，这一列跳到上一轮有效值算，
+  // 既不显示成 +0，也不会把下一轮的空值传染过去；折算用的分钟数按实际间隔取。
+  const base = {};
+  if(DATA[0]) [...PKEYS,'total'].forEach(k=>{ if(DATA[0][k]!=null) base[k]={t:DATA[0].t, v:DATA[0][k]}; });
+  for(let i=1;i<DATA.length;i++){
+    const b = DATA[i];
+    const bt = new Date(b.t.replace(/-/g,'/'));
+    const o = {t:b.t, mins:null};
+    [...PKEYS,'total'].forEach(k=>{
+      const p = base[k];
+      if(b[k]==null || !p){ o[k] = null; return; }
+      const mins = (bt - new Date(p.t.replace(/-/g,'/'))) / 60000;
+      o[k] = mins > 0.2 ? (b[k]-p.v)/mins : null;   // 时间戳重复或倒序
+      if(k==='total') o.mins = mins;
+    });
+    [...PKEYS,'total'].forEach(k=>{ if(b[k]!=null) base[k]={t:b.t, v:b[k]}; });
+    out.push(o);
+  }
+  // 逐序列剔除离群点：某个点超过该序列中位数的 20 倍就置空
+  // OCR 偶尔少读几位（6,086,956 → 86,956），不拦会在图上画出 ±几百万的假峰谷
+  [...PKEYS,'total'].forEach(k=>{
+    const vals = out.map(o=>o[k]).filter(v=>v!=null && v>0).sort((a,b)=>a-b);
+    if(vals.length < 5) return;
+    const med = vals[Math.floor(vals.length/2)];
+    const cap = Math.max(med*20, 60000);
+    out.forEach(o=>{ if(o[k]!=null && (o[k] > cap || o[k] < -cap)) o[k] = null; });
+  });
+  return out;
+}
+
+function drawGain(cv){
+  const {g, W, H} = setup(cv, 300);
+  const pad = {l:52,r:14,t:12,b:26};
+  const rows = gains();
+  if(!rows.length){ hint(g,W,H,'等下一次采样…'); return; }
+
+  // 总票数的增量约等于四人之和，放同一根轴上会把四条线压到底部，这里只画选手
+  const keys = PKEYS;
+  let peak = 0;
+  rows.forEach(r=>keys.forEach(k=>{ if(r[k]!=null) peak=Math.max(peak,r[k]); }));
+  const ax = niceAxis(Math.max(peak*1.08, 100));
+
+  const xs = rows.map((_,i)=>i);
+  const {X, Y} = drawSeries(g, W, H, pad, xs, ax);
+
+  g.textAlign='center';
+  const show = pickIdx(rows.length, Math.max(3, Math.min(6, Math.floor(W/120))));
+  const idxs = [...show].sort((a,b)=>a-b);
+  idxs.forEach((i,pos)=>{ g.textAlign = pos===0?'left' : pos===idxs.length-1?'right':'center';
+    g.fillText(axisLabel(rows[i].t), X(i), H-8); });
+  g.textAlign='center';
+
+  keys.forEach(k=>{
+    const s = SERIES.find(x=>x.key===k);
+    const isTotal = k==='total';
+    g.beginPath(); g.strokeStyle=s.c; g.lineWidth=isTotal?1.4:2; g.lineJoin='round';
+    if(isTotal){ g.setLineDash([4,4]); g.globalAlpha=.6; }
+    let started=false;
+    rows.forEach((r,i)=>{ const v=r[k]; if(v==null) return;
+      const x=X(i), y=Y(Math.max(0,v));
+      started ? g.lineTo(x,y) : (g.moveTo(x,y), started=true);
+    });
+    g.stroke(); g.setLineDash([]); g.globalAlpha=1;
+    const last = [...rows].reverse().find(r=>r[k]!=null);
+    if(last){ const i = rows.lastIndexOf(last);
+      g.beginPath(); g.arc(X(i),Y(Math.max(0,last[k])),3.2,0,7); g.fillStyle=s.c; g.fill();
+      g.strokeStyle='#fff'; g.lineWidth=1.5; g.stroke(); }
+  });
+}
+
+// 五个板块的圆环：前四名各自占比 + 其他
+// 某列最近一次读到的值。末行可能是空的（那一位没读准），不能直接拿 DATA 末行
+function lastVal(k){
+  for(let i=DATA.length-1;i>=0;i--) if(DATA[i][k]!=null) return DATA[i][k];
+  return null;
+}
+
+function pieData(){
+  if(!DATA.length) return null;
+  const parts = PKEYS.map(k=>{
+    const s = SERIES.find(x=>x.key===k);
+    return {name:s.name, c:s.c, v:lastVal(k)||0};
+  });
+  const sum4 = parts.reduce((a,b)=>a+b.v,0);
+  const total = lastVal('total')||0;
+  const raw = total - sum4;
+  // 其他选手合计只占 0.3% 上下。算出负数、或大到 10% 以上，说明某个选手读到的是残缺值，
+  // 这块就不画了 —— 宁可缺一块，也别把错误读数当成"其他人票数暴涨"。
+  const bad = raw < 0 || raw > total*0.1;
+  parts.push({name:'其他', c:OTHER_C, v: bad ? 0 : raw, bad});
+  const tot = parts.reduce((a,b)=>a+b.v,0) || 1;
+  parts.forEach(p=>p.p = p.v/tot*100);
+  return {parts, tot};
+}
+
+function drawPie(cv){
+  const S = 186;
+  const dpr = window.devicePixelRatio||1;
+  cv.style.width = S+'px'; cv.style.height = S+'px';
+  cv.width = S*dpr; cv.height = S*dpr;
+  const g = cv.getContext('2d');
+  g.setTransform(1,0,0,1,0,0); g.scale(dpr,dpr); g.clearRect(0,0,S,S);
+
+  const d = pieData();
+  if(!d){ return; }
+  const cx = S/2, cy = S/2, r = S/2-6, inner = r*0.615;
+
+  let a = -Math.PI/2;
+  const gap = 0.018;   // 相邻板块之间留一点缝，边界更清楚
+  d.parts.forEach(p=>{
+    const sweep = p.v/d.tot*Math.PI*2;
+    if(sweep <= 0) return;
+    const a0 = a + gap/2, a1 = a + sweep - gap/2;
+    if(a1 > a0){
+      g.beginPath();
+      g.arc(cx, cy, r, a0, a1);
+      g.arc(cx, cy, inner, a1, a0, true);
+      g.closePath();
+      g.fillStyle = p.c; g.fill();
+    }
+    a += sweep;
+  });
+
+  // 中心：总票数
+  g.textAlign='center'; g.fillStyle='#181b21';
+  g.font='600 19px ui-monospace,monospace';
+  g.fillText(wan(d.tot), cx, cy+1);
+  g.font='11px sans-serif'; g.fillStyle='#9aa1ad';
+  g.fillText('总票数', cx, cy+17);
+}
+
+function renderPieList(){
+  const d = pieData();
+  const el = document.getElementById('plist');
+  if(!d){ el.innerHTML='<div class="empty">暂无数据</div>'; return; }
+  const mx = Math.max(...d.parts.map(p=>p.p));
+  el.innerHTML = d.parts.map(p=>`
+    <div class="prow">
+      <span class="sw" style="background:${p.c}"></span>
+      <span class="nm">${p.name}</span>
+      <span class="bar"><i style="width:${(p.p/mx*100).toFixed(1)}%;background:${p.c}"></i></span>
+      <span class="pp">${p.bad?'—':p.p.toFixed(1)+'%'}</span>
+      <span class="pv">${p.bad?'—':fmt(p.v)}</span>
+    </div>`).join('');
+}
+
+function render(){
+  const g = gains();
+  const gl = g.length ? g[g.length-1] : null;
+  document.getElementById('cards').innerHTML = SERIES.map(s=>{
+    const val = lastVal(s.key);
+    // 用最近一轮的「每分钟涨幅」，而不是拿末两行直接相减：
+    // 采集中断过一段时间时，直接相减会把 20 多分钟的增量当成一分钟的，卡片上会冒出 +7 万这种数字
+    let d = (gl && gl[s.key]!=null) ? Math.round(gl[s.key]) : null;
+    // 正常单轮增量不到 2 万，超过 20 万就是识别错误，宁可显示"—"
+    if(d!=null && Math.abs(d) > 200000) d = null;
+    return `<div class="card" style="--c:${s.c}">
+      <div class="cname">${s.name}</div>
+      <div class="cval">${fmt(val)}</div>
+      <div class="cdelta${d===0?' zero':''}">${d==null?'—':(d>=0?'+':'')+fmt(d)}</div>
+    </div>`;
+  }).join('');
+
+  const legendHTML = SERIES.map(s=>
+    `<div class="lg"><span class="sw" style="background:${s.c}"></span>${s.name}</div>`).join('');
+  document.getElementById('legend').innerHTML = legendHTML;
+  // 涨幅图不画总票数，图例也跟着少一项
+  document.getElementById('legend2').innerHTML = SERIES.filter(s=>s.key!=='total').map(s=>
+    `<div class="lg"><span class="sw" style="background:${s.c}"></span>${s.name}</div>`).join('');
+
+  const rows = gains().reverse().slice(0,40);
+  const rate = v => v==null ? '—' : (v>=0?'+':'')+fmt(Math.round(v));
+  document.getElementById('tbody').innerHTML = rows.length ? rows.map(r=>`<tr>
+      <td>${String(r.t).slice(5)}</td>
+      <td>${rate(r.total)}</td>
+      <td style="color:var(--p1)">${rate(r.r1l)}</td>
+      <td style="color:var(--p2)">${rate(r.r1r)}</td>
+      <td style="color:var(--p3)">${rate(r.r2l)}</td>
+      <td style="color:var(--p4)">${rate(r.r2r)}</td>
+    </tr>`).join('') : '<tr><td colspan="6" class="empty">暂无数据</td></tr>';
+
+  drawLine(document.getElementById('line'));
+  drawGain(document.getElementById('gain'));
+  drawPie(document.getElementById('pie'));
+  renderPieList();
+
+  const dot = document.getElementById('dot'), txt = document.getElementById('liveTxt');
+  if(DATA.length){
+    dot.classList.remove('off');
+    const lastT = DATA[DATA.length-1].t;
+    txt.textContent = `已采样 ${DATA.length} 次 · 最后 ${lastT.slice(11)}`;
+    document.getElementById('meta').textContent =
+      `间隔约 ${DATA.length>1 ? Math.round((new Date(DATA[DATA.length-1].t.replace(/-/g,'/')) - new Date(DATA[0].t.replace(/-/g,'/')))/1000/60/(DATA.length-1)) + ' 分钟' : '—'}`;
+  }
+}
+
+async function tick(){
+  try{
+    const res = await fetch('votes.csv?t='+Date.now(), {cache:'no-store'});
+    if(!res.ok) throw 0;
+    DATA = parseCSV(await res.text());
+    render();
+    document.getElementById('liveTxt').classList.remove('off');
+  }catch(e){
+    document.getElementById('dot').classList.add('off');
+    document.getElementById('liveTxt').textContent = '读不到 votes.csv';
+  }
+}
+addEventListener('resize', render);
+tick();
+// 本机服务上每 15 秒拉一次；放到 GitHub Pages 上数据本身每 5 分钟才更新一次，
+// 还每 15 秒拉一遍纯属浪费 Pages 的带宽额度，改成 60 秒。
+const LOCAL = /^(127\.0\.0\.1|localhost)$/.test(location.hostname);
+setInterval(tick, LOCAL ? 15000 : 60000);
+setInterval(tick, 15000);
+</script>
+</body>
+</html>
