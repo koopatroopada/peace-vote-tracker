@@ -336,14 +336,35 @@ def to_int(s):
 
 
 def extract_total(items):
-    """从「所有玩家总投票数：13758372」里取数字"""
+    """从「所有玩家总投票数：13758372」里取数字
+
+    OCR 有时会把标签和数字拆成两条（「所有玩家总投票数：」+「20391483」），
+    只认同一条里的数字会漏读，所以再退一步：在同一横带里找靠右的那个数。
+    """
+    label_y = None
     for text, cx, cy, score in items:
         if TOTAL_RE.search(text):
             tail = re.split(r"[:：]", text)[-1]
             m = NUM_RE.search(tail)
             if m and to_int(m.group()) >= MIN_VOTE:
                 return to_int(m.group())
-    return None
+            if label_y is None:
+                label_y = cy
+    if label_y is None:
+        return None
+    best = None
+    for text, cx, cy, score in items:
+        if abs(cy - label_y) > 60:
+            continue
+        m = NUM_RE.search(text)
+        if not m:
+            continue
+        v = to_int(m.group())
+        if v < MIN_VOTE:
+            continue
+        if best is None or cx > best[1]:
+            best = (v, cx)
+    return best[0] if best else None
 
 
 def find_anchor(items, name):
@@ -561,6 +582,21 @@ class Scraper:
                     return got
         return None
 
+    def refine_total(self, blocks, prev):
+        """总票数那一行没读到时，只裁这一条横带重读
+
+        整块里 1000px 高的内容 OCR 偶尔会把这一行整条漏掉；单独裁出来几乎必中。
+        """
+        for img, items in blocks:
+            ys = [cy for text, cx, cy, score in items if TOTAL_RE.search(text)]
+            y0 = int(ys[0]) - 70 if ys else 110
+            band = img.crop((0, max(0, y0), img.width, min(img.height, y0 + 130)))
+            for var in self._variants(band):
+                got = pick_vote(tile_candidates(self.ocr.read(var)), prev, self.gap_min)
+                if got:
+                    return got
+        return None
+
     @staticmethod
     def suspect_fields(votes):
         """缺失，或比上一名次小 3 倍以上 → 判为识别可疑"""
@@ -616,6 +652,13 @@ class Scraper:
         vb = extract_votes(ib, tb.width, tb.height,
                            prev=self.prev, minutes=self.gap_min)
         votes = merge(va, vb)
+
+        # 总票数读不到就整轮作废，损失太大 —— 单独裁这一条横带再试
+        if votes.get("total") is None:
+            got = self.refine_total([(ta, ia), (tb, ib)], self.prev.get("total"))
+            if got is not None:
+                votes["total"] = got
+                print("    · 总票数 重读成功 %d" % got)
 
         # 缺字段、或落在合理区间外的，单独裁这张卡片重读一次
         for k in [k for k in ORDER

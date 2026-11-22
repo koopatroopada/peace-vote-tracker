@@ -23,12 +23,20 @@ def data_dir():
 
 
 class Handler(http.server.SimpleHTTPRequestHandler):
-    """html 从资源目录取，csv 从数据目录取"""
+    """html 从资源目录取，csv 从数据目录取
+
+    只放行白名单里的两个文件。这个服务会被隧道暴露到公网，
+    目录里还有截图、源码、日志和记忆文件，路径必须写死，不能按相对路径随便取。
+    """
+
+    ALLOW = {"dashboard.html", "votes.csv"}
 
     def translate_path(self, path):
         rel = path.split("?", 1)[0].split("#", 1)[0].lstrip("/")
         if rel in ("", "index.html"):
             rel = "dashboard.html"
+        if rel not in self.ALLOW:
+            return str(bundle_dir() / "_denied_")   # 不存在 → 404
         for base in (data_dir(), bundle_dir()):
             p = base / rel
             if p.is_file():
@@ -43,15 +51,16 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         pass  # 静音，避免刷屏
 
 
-def make_server(port=8770):
+def make_server(port=8770, host="127.0.0.1"):
     socketserver.TCPServer.allow_reuse_address = True
-    return socketserver.ThreadingTCPServer(("127.0.0.1", port), Handler)
+    return socketserver.ThreadingTCPServer((host, port), Handler)
 
 
 def main():
     port = int(sys.argv[1]) if len(sys.argv) > 1 else 8770
-    with make_server(port) as httpd:
-        print("看板地址: http://127.0.0.1:%d/" % port, flush=True)
+    host = os.environ.get("DASHBOARD_HOST", "127.0.0.1")
+    with make_server(port, host) as httpd:
+        print("看板地址: http://%s:%d/" % (host, port), flush=True)
         httpd.serve_forever()
 
 

@@ -41,7 +41,10 @@
   .legend{display:flex;gap:14px;margin-bottom:10px;flex-wrap:wrap;font-size:12px;color:var(--ink2)}
   .lg{display:flex;align-items:center;gap:5px}
   .sw{width:9px;height:9px;border-radius:2px}
-  canvas{width:100%;display:block}
+  canvas{width:100%;max-width:100%;display:block}
+  /* canvas 的 width 属性是物理像素（W×dpr），会被当成 min-content 宽度，
+     在 grid/flex 里把容器顶宽 —— 手机上表现为整页右半边被切掉 */
+  .grid2 > *{min-width:0}
 
   .grid2{display:grid;grid-template-columns:1fr 1fr;gap:14px;align-items:start}
   .grid2.pie{grid-template-columns:.78fr 1.22fr}
@@ -65,8 +68,14 @@
   .scroll{max-height:300px;overflow:auto}
   .empty{color:var(--ink3);text-align:center;padding:40px 0;font-size:13px}
   @media(max-width:980px){
+    body{overflow-x:hidden}
     .cards{grid-template-columns:repeat(2,1fr)}
     .grid2,.grid2.pie{grid-template-columns:1fr}
+    /* 手机上圆环 + 明细的横向最小宽度会撑破页面，导致整页右半边被切掉 */
+    .wrap{padding:14px 12px 32px}
+    .piebox{gap:12px}
+    .plist{min-width:0}
+    .prow .nm{flex:0 0 60px}
   }
 </style>
 </head>
@@ -333,15 +342,20 @@ function drawGain(cv){
 }
 
 // 五个板块的圆环：前四名各自占比 + 其他
+// 某列最近一次读到的值。末行可能是空的（那一位没读准），不能直接拿 DATA 末行
+function lastVal(k){
+  for(let i=DATA.length-1;i>=0;i--) if(DATA[i][k]!=null) return DATA[i][k];
+  return null;
+}
+
 function pieData(){
-  const last = DATA[DATA.length-1];
-  if(!last) return null;
+  if(!DATA.length) return null;
   const parts = PKEYS.map(k=>{
     const s = SERIES.find(x=>x.key===k);
-    return {name:s.name, c:s.c, v:last[k]||0};
+    return {name:s.name, c:s.c, v:lastVal(k)||0};
   });
   const sum4 = parts.reduce((a,b)=>a+b.v,0);
-  const total = last.total||0;
+  const total = lastVal('total')||0;
   const raw = total - sum4;
   // 其他选手合计只占 0.3% 上下。算出负数、或大到 10% 以上，说明某个选手读到的是残缺值，
   // 这块就不画了 —— 宁可缺一块，也别把错误读数当成"其他人票数暴涨"。
@@ -404,11 +418,13 @@ function renderPieList(){
 }
 
 function render(){
-  const last = DATA[DATA.length-1];
-  const prev = DATA[DATA.length-2];
+  const g = gains();
+  const gl = g.length ? g[g.length-1] : null;
   document.getElementById('cards').innerHTML = SERIES.map(s=>{
-    const val = last ? last[s.key] : null;
-    let d = (last && prev && last[s.key]!=null && prev[s.key]!=null) ? last[s.key]-prev[s.key] : null;
+    const val = lastVal(s.key);
+    // 用最近一轮的「每分钟涨幅」，而不是拿末两行直接相减：
+    // 采集中断过一段时间时，直接相减会把 20 多分钟的增量当成一分钟的，卡片上会冒出 +7 万这种数字
+    let d = (gl && gl[s.key]!=null) ? Math.round(gl[s.key]) : null;
     // 正常单轮增量不到 2 万，超过 20 万就是识别错误，宁可显示"—"
     if(d!=null && Math.abs(d) > 200000) d = null;
     return `<div class="card" style="--c:${s.c}">
