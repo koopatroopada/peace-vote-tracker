@@ -518,6 +518,9 @@ class Scraper:
             try:
                 votes, raw = self.read_once(dry_run=dry_run,
                                             save=(self.save_mode == "all"))
+                # 一个数字都没读到（页面没加载完 / 截图是白屏）就跳过，别往 CSV 里写空行
+                if votes.get("total") is None:
+                    raise RuntimeError("本轮没读到总票数，跳过写入")
                 bad = self.suspect_fields(votes)
                 if bad and self.save_mode == "need" and self.last_images:
                     a, b = self.last_images

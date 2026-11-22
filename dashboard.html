@@ -87,7 +87,7 @@
       <canvas id="line"></canvas>
     </div>
     <div class="panel">
-      <div class="ptitle"><b>每分钟涨幅</b><span>相邻两次采样之间新增的票数</span></div>
+      <div class="ptitle"><b>每分钟涨幅</b><span>相邻两次采样的差值，按实际间隔折算到每分钟</span></div>
       <div class="legend" id="legend2"></div>
       <canvas id="gain"></canvas>
     </div>
@@ -102,7 +102,7 @@
       </div>
     </div>
     <div class="panel">
-      <div class="ptitle"><b>每轮明细</b><span>最近 40 次采样，各选手当轮新增</span></div>
+      <div class="ptitle"><b>每轮明细</b><span>最近 40 次采样，折算成每分钟各选手涨多少</span></div>
       <div class="scroll">
         <table>
           <thead><tr><th>时间</th><th>Δ总</th><th>白小纯</th><th>青稚</th><th>Paraboy</th><th>33Svan</th></tr></thead>
@@ -142,15 +142,30 @@ function parseCSV(text){
   }).filter(r=>r.total!=null);
 }
 
-// Y 轴按 5 段均分，步长取 1/2/2.5/5/10 × 10^n，刻度才是 50k / 100k 这种整数
-function niceAxis(v, div){
-  const D = div || 5;
-  if(!(v>0)) return {hi:D*200, step:200, div:D};
-  const raw = v/D;
-  const exp = Math.floor(Math.log10(raw)), base = Math.pow(10, exp), n = raw/base;
-  const mult = [1,2,2.5,5,10].find(s=>n<=s+1e-9) || 10;
-  const step = mult*base;
-  return {hi:step*D, step, div:D};
+// Y 轴：在若干「段数 × 步长」组合里挑一个上界最贴近数据的，避免一半画布是空白
+function niceAxis(v){
+  if(!(v>0)) return {hi:1000, step:200, div:5};
+  const mults = [1,1.2,1.5,2,2.5,3,4,5,6,8,10];
+  let best = null;
+  for(const div of [5,4,6,8]){
+    const baseExp = Math.floor(Math.log10(v/div));
+    for(const e of [baseExp-1, baseExp, baseExp+1]){
+      for(const m of mults){
+        const step = m*Math.pow(10,e), hi = step*div;
+        if(hi < v*1.02) continue;
+        const waste = hi/v;
+        if(!best || waste < best.waste) best = {hi, step, div, waste};
+      }
+    }
+  }
+  return best || {hi:v, step:v/5, div:5};
+}
+
+// 刻度值：过百万用 M，过千用 k
+function tickLabel(v){
+  if(v >= 1e6){ const x = v/1e6; return (x%1 ? x.toFixed(1) : x) + 'M'; }
+  if(v >= 1000){ const x = v/1000; return (x%1 ? x.toFixed(1) : x) + 'k'; }
+  return String(Math.round(v));
 }
 
 // 横轴标签：跨度小于 40 分钟时精确到秒，否则只到分
@@ -196,7 +211,7 @@ function drawSeries(g, W, H, pad, xs, ax){
   for(let i=0;i<=ax.div;i++){
     const v = ax.step*i, y = Y(v);
     g.beginPath(); g.moveTo(pad.l,y); g.lineTo(W-pad.r,y); g.stroke();
-    g.fillText(v>=1000 ? (v/1000).toFixed(v%1000?1:0)+'k' : Math.round(v), pad.l-8, y+4);
+    g.fillText(tickLabel(v), pad.l-8, y+4);
   }
   return {X, Y};
 }
@@ -243,13 +258,18 @@ function drawLine(cv){
   });
 }
 
-// 相邻两次采样的差值 = 这一分钟涨了多少票
+// 相邻两次采样的差值，按实际间隔折算成「每分钟涨多少」
+// 直接看差值会被长间隔（电脑休眠、采集中断）带偏，折算后各点可比
 function gains(){
   const out = [];
   for(let i=1;i<DATA.length;i++){
     const a = DATA[i-1], b = DATA[i];
-    const o = {t:b.t};
-    [...PKEYS,'total'].forEach(k=>{ o[k] = (a[k]==null||b[k]==null) ? null : b[k]-a[k]; });
+    const mins = (new Date(b.t.replace(/-/g,'/')) - new Date(a.t.replace(/-/g,'/'))) / 60000;
+    if(!(mins > 0.2)) continue;      // 时间戳重复或倒序，跳过
+    const o = {t:b.t, mins};
+    [...PKEYS,'total'].forEach(k=>{
+      o[k] = (a[k]==null||b[k]==null) ? null : (b[k]-a[k])/mins;
+    });
     out.push(o);
   }
   return out;
@@ -383,13 +403,14 @@ function render(){
     `<div class="lg"><span class="sw" style="background:${s.c}"></span>${s.name}</div>`).join('');
 
   const rows = gains().reverse().slice(0,40);
+  const rate = v => v==null ? '—' : (v>=0?'+':'')+fmt(Math.round(v));
   document.getElementById('tbody').innerHTML = rows.length ? rows.map(r=>`<tr>
       <td>${String(r.t).slice(5)}</td>
-      <td>${r.total==null?'—':(r.total>=0?'+':'')+fmt(r.total)}</td>
-      <td style="color:var(--p1)">${r.r1l==null?'—':(r.r1l>=0?'+':'')+fmt(r.r1l)}</td>
-      <td style="color:var(--p2)">${r.r1r==null?'—':(r.r1r>=0?'+':'')+fmt(r.r1r)}</td>
-      <td style="color:var(--p3)">${r.r2l==null?'—':(r.r2l>=0?'+':'')+fmt(r.r2l)}</td>
-      <td style="color:var(--p4)">${r.r2r==null?'—':(r.r2r>=0?'+':'')+fmt(r.r2r)}</td>
+      <td>${rate(r.total)}</td>
+      <td style="color:var(--p1)">${rate(r.r1l)}</td>
+      <td style="color:var(--p2)">${rate(r.r1r)}</td>
+      <td style="color:var(--p3)">${rate(r.r2l)}</td>
+      <td style="color:var(--p4)">${rate(r.r2r)}</td>
     </tr>`).join('') : '<tr><td colspan="6" class="empty">暂无数据</td></tr>';
 
   drawLine(document.getElementById('line'));
