@@ -13,6 +13,8 @@ dist/
 
 # 运行产物（不提交）
 votes.csv
+votes_raw_backup.csv
+votes_before_swap.csv
 shots/
 .stop
 scraper_config.json
@@ -32,3 +34,13 @@ preview.png
 
 # 打包用的内置资源（adb 二进制，从本机 SDK 复制，不入库）
 build_assets/
+
+# 本机临时脚本与诊断文件
+_run_*.bat
+_detach*.py
+_proc*.txt
+_spawn*.txt
+
+# 数据备份（修复前后各留一份，属本机运行产物）
+votes_*backup*.csv
+votes_before_*.csv

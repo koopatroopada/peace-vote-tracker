@@ -262,16 +262,33 @@ function drawLine(cv){
 // 直接看差值会被长间隔（电脑休眠、采集中断）带偏，折算后各点可比
 function gains(){
   const out = [];
+  // 每列各自记住「上一个有效读数」。某轮某位选手没读到时，这一列跳到上一轮有效值算，
+  // 既不显示成 +0，也不会把下一轮的空值传染过去；折算用的分钟数按实际间隔取。
+  const base = {};
+  if(DATA[0]) [...PKEYS,'total'].forEach(k=>{ if(DATA[0][k]!=null) base[k]={t:DATA[0].t, v:DATA[0][k]}; });
   for(let i=1;i<DATA.length;i++){
-    const a = DATA[i-1], b = DATA[i];
-    const mins = (new Date(b.t.replace(/-/g,'/')) - new Date(a.t.replace(/-/g,'/'))) / 60000;
-    if(!(mins > 0.2)) continue;      // 时间戳重复或倒序，跳过
-    const o = {t:b.t, mins};
+    const b = DATA[i];
+    const bt = new Date(b.t.replace(/-/g,'/'));
+    const o = {t:b.t, mins:null};
     [...PKEYS,'total'].forEach(k=>{
-      o[k] = (a[k]==null||b[k]==null) ? null : (b[k]-a[k])/mins;
+      const p = base[k];
+      if(b[k]==null || !p){ o[k] = null; return; }
+      const mins = (bt - new Date(p.t.replace(/-/g,'/'))) / 60000;
+      o[k] = mins > 0.2 ? (b[k]-p.v)/mins : null;   // 时间戳重复或倒序
+      if(k==='total') o.mins = mins;
     });
+    [...PKEYS,'total'].forEach(k=>{ if(b[k]!=null) base[k]={t:b.t, v:b[k]}; });
     out.push(o);
   }
+  // 逐序列剔除离群点：某个点超过该序列中位数的 20 倍就置空
+  // OCR 偶尔少读几位（6,086,956 → 86,956），不拦会在图上画出 ±几百万的假峰谷
+  [...PKEYS,'total'].forEach(k=>{
+    const vals = out.map(o=>o[k]).filter(v=>v!=null && v>0).sort((a,b)=>a-b);
+    if(vals.length < 5) return;
+    const med = vals[Math.floor(vals.length/2)];
+    const cap = Math.max(med*20, 60000);
+    out.forEach(o=>{ if(o[k]!=null && (o[k] > cap || o[k] < -cap)) o[k] = null; });
+  });
   return out;
 }
 
@@ -324,8 +341,12 @@ function pieData(){
     return {name:s.name, c:s.c, v:last[k]||0};
   });
   const sum4 = parts.reduce((a,b)=>a+b.v,0);
-  const other = Math.max(0, (last.total||0) - sum4);
-  parts.push({name:'其他', c:OTHER_C, v:other});
+  const total = last.total||0;
+  const raw = total - sum4;
+  // 其他选手合计只占 0.3% 上下。算出负数、或大到 10% 以上，说明某个选手读到的是残缺值，
+  // 这块就不画了 —— 宁可缺一块，也别把错误读数当成"其他人票数暴涨"。
+  const bad = raw < 0 || raw > total*0.1;
+  parts.push({name:'其他', c:OTHER_C, v: bad ? 0 : raw, bad});
   const tot = parts.reduce((a,b)=>a+b.v,0) || 1;
   parts.forEach(p=>p.p = p.v/tot*100);
   return {parts, tot};
@@ -377,8 +398,8 @@ function renderPieList(){
       <span class="sw" style="background:${p.c}"></span>
       <span class="nm">${p.name}</span>
       <span class="bar"><i style="width:${(p.p/mx*100).toFixed(1)}%;background:${p.c}"></i></span>
-      <span class="pp">${p.p.toFixed(1)}%</span>
-      <span class="pv">${fmt(p.v)}</span>
+      <span class="pp">${p.bad?'—':p.p.toFixed(1)+'%'}</span>
+      <span class="pv">${p.bad?'—':fmt(p.v)}</span>
     </div>`).join('');
 }
 
@@ -387,7 +408,9 @@ function render(){
   const prev = DATA[DATA.length-2];
   document.getElementById('cards').innerHTML = SERIES.map(s=>{
     const val = last ? last[s.key] : null;
-    const d = (last && prev && last[s.key]!=null && prev[s.key]!=null) ? last[s.key]-prev[s.key] : null;
+    let d = (last && prev && last[s.key]!=null && prev[s.key]!=null) ? last[s.key]-prev[s.key] : null;
+    // 正常单轮增量不到 2 万，超过 20 万就是识别错误，宁可显示"—"
+    if(d!=null && Math.abs(d) > 200000) d = null;
     return `<div class="card" style="--c:${s.c}">
       <div class="cname">${s.name}</div>
       <div class="cval">${fmt(val)}</div>

@@ -346,38 +346,88 @@ def extract_total(items):
     return None
 
 
-def extract_votes(items, w, h):
-    """按选手名做锚点，取其下方 30~170px、同一半屏的票数
+def find_anchor(items, name):
+    """定位选手名，返回 (cx, cy)"""
+    for text, cx, cy, score in items:
+        if name.lower() in text.lower():
+            return cx, cy
+    return None
 
-    不依赖固定 y 坐标，滚动量变动也能适应。
+
+def vote_candidates(items, ax, ay):
+    """名字下方、同一张卡片内的票数候选 [(值, 置信度), ...]"""
+    cands = []
+    for text, cx, cy, score in items:
+        if not (ay + 25 <= cy <= ay + 180):
+            continue
+        # 票数必须和名字在同一张卡片里。原先按「左半屏 / 右半屏」判断是错的：
+        # 第 2 排左列其实是 33Svan、右列是 Paraboy，和 key 里的 l/r 假设相反，
+        # 结果这两人的票数一直互换。改成看横向距离，与页面怎么排无关。
+        if abs(cx - ax) > 300:
+            continue
+        m = NUM_RE.search(text)
+        if not m:
+            continue
+        v = to_int(m.group())
+        if v < MIN_VOTE:
+            continue
+        cands.append((v, score))
+    return cands
+
+
+def tile_candidates(items):
+    """一小块裁剪图里的所有数字候选（图里只有一张卡片的票数）"""
+    cands = []
+    for text, cx, cy, score in items:
+        m = NUM_RE.search(text)
+        if not m:
+            continue
+        v = to_int(m.group())
+        if v < MIN_VOTE:
+            continue
+        cands.append((v, score))
+    return cands
+
+
+def plausible(v, p, minutes):
+    """票数只增不减，且单轮涨幅有上限 —— OCR 少读几位全靠这一条挡
+
+    每分钟最多涨 1%，再加 5 万缓冲：断采很久也够宽松，一分钟内的错读一定挡得住。
+    """
+    if v is None:
+        return False
+    if not p:
+        return True
+    grow = 0.01 * max(minutes, 1.0)
+    return p * (1 - 0.02 - grow) <= v <= p * (1 + grow) + 50000
+
+
+def pick_vote(cands, prev=None, minutes=1.0):
+    """在候选里挑一个落在合理区间的；全都不合理就返回 None"""
+    if not cands:
+        return None
+    if not prev:
+        return max(cands, key=lambda c: c[1])[0]
+    grow = 0.01 * max(minutes, 1.0)
+    lo, hi = prev * (1 - 0.02 - grow), prev * (1 + grow) + 50000
+    ok = [c for c in cands if lo <= c[0] <= hi]
+    return max(ok, key=lambda c: c[1])[0] if ok else None
+
+
+def extract_votes(items, w, h, prev=None, minutes=1.0):
+    """按选手名做锚点，取其下方 25~180px、同一张卡片内的票数
+
+    prev / minutes 用来挡识别错误：OCR 偶尔会把 6,086,956 读成 86,956（丢高位），
+    这类值置信度不一定低，光靠 score 挑会挑错，必须用上一轮的值卡区间。
     """
     result = {"total": extract_total(items)}
     for name, key in PLAYERS:
-        result.setdefault(key, None)
-        ay = None
-        for text, cx, cy, score in items:
-            if name.lower() in text.lower():
-                ay = cy
-                break
-        if ay is None:
+        a = find_anchor(items, name)
+        if not a:
+            result.setdefault(key, None)
             continue
-        want_left = key.endswith("l")
-        best = None
-        for text, cx, cy, score in items:
-            if not (ay + 25 <= cy <= ay + 175):
-                continue
-            if (cx < w / 2) != want_left:
-                continue
-            m = NUM_RE.search(text)
-            if not m:
-                continue
-            v = to_int(m.group())
-            if v < MIN_VOTE:
-                continue
-            if best is None or score > best[1]:
-                best = (v, score)
-        if best:
-            result[key] = best[0]
+        result[key] = pick_vote(vote_candidates(items, a[0], a[1]),
+                                (prev or {}).get(key), minutes)
     return result
 
 
@@ -399,6 +449,9 @@ class Scraper:
         # save_mode: none 不存 / need 只在读数可疑时存 / all 每轮都存
         self.save_mode = save_mode
         self.last_images = None
+        self.prev = read_last_known()   # 上一轮读数，用来卡「票数只能涨」的合理区间；重启时从 CSV 续上
+        self.gap_min = 1.0      # 距上一轮采样的分钟数，断采越久允许的涨幅越大
+        self.last_t = None
         self.dev = Adb()
         # 先确定设备再读分辨率：同时插着线又开着无线调试时，不带 -s 的 adb 命令会拒绝执行
         serial = self.dev.ensure_device()
@@ -452,6 +505,62 @@ class Scraper:
         ax, ay = self.pt(self.cfg["tap_ad"])
         self.dev.tap(ax, ay)
 
+    def sanitize(self, votes):
+        """写入前的最后一道：落在合理区间外的值一律清空
+
+        这里**不抄上一轮的值**。抄的后果是这一轮 Δ=0、下一轮暴涨把差额补回来，
+        曲线上会出现一个假的平段加一个假尖峰 —— 比留个空值更难解释。
+        空值在看板上显示为「—」，下一轮自动按真实间隔折算，数据不会失真。
+        """
+        if not self.prev:
+            return votes
+        out = dict(votes)
+        bad = []
+        for k in ORDER:
+            p = self.prev.get(k)
+            if not p:
+                continue
+            v = out.get(k)
+            if not plausible(v, p, self.gap_min):
+                out[k] = None
+                bad.append(k)
+        if bad:
+            print("  ! %s 读数不可信，本轮留空" %
+                  "、".join(HEADERS[k] for k in bad))
+        return out
+
+    @staticmethod
+    def _variants(tile):
+        """同一块数字的几种预处理，逐个喂给 OCR"""
+        from PIL import ImageOps
+        yield tile
+        g = ImageOps.autocontrast(tile.convert("L"), cutoff=1)
+        yield g.convert("RGB")
+        yield ImageOps.invert(g).convert("RGB")
+
+    def refine_vote(self, blocks, key, prev):
+        """整块读不准时，单独裁这张卡片下方的数字再读一遍
+
+        整块裁剪图里两张大卡片并排、数字偏小，偶发丢高位；单独裁一小块让数字占满画面，
+        识别率明显更高。几种预处理各试一遍，取第一个落在合理区间的读数。
+        """
+        name = next(n for n, k in PLAYERS if k == key)
+        for img, items in blocks:
+            a = find_anchor(items, name)
+            if not a:
+                continue
+            ax, ay = a
+            x0, y0 = max(0, int(ax - 300)), max(0, int(ay + 15))
+            x1, y1 = min(img.width, int(ax + 300)), min(img.height, int(ay + 180))
+            if x1 - x0 < 120 or y1 - y0 < 50:
+                continue
+            tile = img.crop((x0, y0, x1, y1))
+            for var in self._variants(tile):
+                got = pick_vote(tile_candidates(self.ocr.read(var)), prev, self.gap_min)
+                if got is not None:
+                    return got
+        return None
+
     @staticmethod
     def suspect_fields(votes):
         """缺失，或比上一名次小 3 倍以上 → 判为识别可疑"""
@@ -466,6 +575,15 @@ class Scraper:
             if v is not None:
                 prev = v
         return bad
+
+    def crop(self, img, tag):
+        """裁出关键区域。OCR 只跑这一块：字更大、页面其余内容不干扰，识别率比整屏高得多"""
+        box = self.cfg.get("crop_top" if tag == "top" else "crop_bottom")
+        if not box:
+            return img
+        sx, sy = img.width / BASE_W, img.height / BASE_H
+        x0, y0, x1, y1 = box
+        return img.crop((int(x0 * sx), int(y0 * sy), int(x1 * sx), int(y1 * sy)))
 
     def save_shot(self, img, tag, full=False):
         """裁剪关键区域后存成 JPEG，单张约 100KB（全屏 PNG 是 2.4MB）"""
@@ -491,9 +609,23 @@ class Scraper:
             self.wait_loaded()
             a, b = self.capture_pair()
 
-        va = extract_votes(self.ocr.read(a), a.width, a.height)
-        vb = extract_votes(self.ocr.read(b), b.width, b.height)
+        ta, tb = self.crop(a, "top"), self.crop(b, "bottom")
+        ia, ib = self.ocr.read(ta), self.ocr.read(tb)
+        va = extract_votes(ia, ta.width, ta.height,
+                           prev=self.prev, minutes=self.gap_min)
+        vb = extract_votes(ib, tb.width, tb.height,
+                           prev=self.prev, minutes=self.gap_min)
         votes = merge(va, vb)
+
+        # 缺字段、或落在合理区间外的，单独裁这张卡片重读一次
+        for k in [k for k in ORDER
+                  if not plausible(votes.get(k), self.prev.get(k), self.gap_min)]:
+            got = self.refine_vote([(ta, ia), (tb, ib)], k, self.prev.get(k))
+            if got is None:
+                print("    · %s 重读失败，本轮留空" % HEADERS[k])
+            else:
+                print("    · %s 重读成功 %d" % (HEADERS[k], got))
+                votes[k] = got
         self.last_images = (a, b)   # 供 run() 在读数可疑时回捞留档
 
         # OCR 已经做完，压缩对结果零影响
@@ -515,9 +647,13 @@ class Scraper:
                 break
 
             t0 = time.monotonic()
+            if self.last_t:
+                self.gap_min = max((t0 - self.last_t) / 60, 0.5)
+            self.last_t = t0
             try:
                 votes, raw = self.read_once(dry_run=dry_run,
                                             save=(self.save_mode == "all"))
+                votes = self.sanitize(votes)
                 # 一个数字都没读到（页面没加载完 / 截图是白屏）就跳过，别往 CSV 里写空行
                 if votes.get("total") is None:
                     raise RuntimeError("本轮没读到总票数，跳过写入")
@@ -535,6 +671,10 @@ class Scraper:
                     time.monotonic() - t0,
                     ("  ！可疑 " + ",".join(bad)) if bad else ""))
                 self.append_csv(votes)
+                # 留空的列不覆盖已知值：下一轮还要拿它当参照
+                self.prev = {k: (votes.get(k) if votes.get(k) is not None
+                                 else (self.prev or {}).get(k))
+                             for k in ["total"] + ORDER}
             except KeyboardInterrupt:
                 raise
             except Exception as e:
@@ -585,6 +725,30 @@ class Scraper:
             w.writerow([datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                         total, v.get("r1l"), v.get("r1r"), v.get("r2l"), v.get("r2r"),
                         d_total, d_sum, share])
+
+
+def read_last_known(max_rows=10):
+    """逐列向前找最近一个非空值，供启动时卡区间用（末行可能有意留空的列）"""
+    if not CSV_PATH.exists():
+        return {}
+    try:
+        with CSV_PATH.open("r", newline="", encoding="utf-8-sig") as f:
+            rows = list(csv.reader(f))
+    except Exception:
+        return {}
+    keys = ["total"] + ORDER
+    out = {}
+    for row in reversed(rows[1:][-max_rows:]):
+        for i, k in enumerate(keys):
+            if k in out:
+                continue
+            try:
+                out[k] = int(row[i + 1])
+            except (ValueError, IndexError):
+                pass
+        if len(out) == len(keys):
+            break
+    return out
 
 
 def read_last_csv():
