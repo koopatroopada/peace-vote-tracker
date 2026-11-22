@@ -7,14 +7,14 @@
 <style>
   :root{
     --bg:#f5f6f8; --card:#fff; --line:#e5e7eb; --ink:#181b21; --ink2:#5f6673; --ink3:#9aa1ad;
-    --p1:#e05a3a; --p2:#e8a020; --p3:#3b82f6; --p4:#12a07a; --tot:#8b5cf6;
+    --p1:#e05a3a; --p2:#e8a020; --p3:#3b82f6; --p4:#12a07a; --tot:#8b5cf6; --other:#c2c8d2;
     --up:#d92b2b; --flat:#9aa1ad;
   }
   *{box-sizing:border-box}
   body{margin:0;background:var(--bg);color:var(--ink);
     font:14px/1.5 -apple-system,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;
     -webkit-font-smoothing:antialiased}
-  .wrap{max-width:1180px;margin:0 auto;padding:20px 18px 40px}
+  .wrap{max-width:1240px;margin:0 auto;padding:20px 18px 40px}
 
   header{display:flex;align-items:baseline;gap:14px;flex-wrap:wrap;margin-bottom:16px}
   h1{font-size:19px;font-weight:650;margin:0;letter-spacing:-.2px}
@@ -35,7 +35,7 @@
   .cdelta.zero{color:var(--flat)}
 
   .panel{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px 16px 10px;margin-bottom:14px}
-  .ptitle{display:flex;align-items:baseline;gap:10px;margin-bottom:10px}
+  .ptitle{display:flex;align-items:baseline;gap:10px;margin-bottom:10px;flex-wrap:wrap}
   .ptitle b{font-size:14px;font-weight:620}
   .ptitle span{font-size:12px;color:var(--ink3)}
   .legend{display:flex;gap:14px;margin-bottom:10px;flex-wrap:wrap;font-size:12px;color:var(--ink2)}
@@ -43,18 +43,30 @@
   .sw{width:9px;height:9px;border-radius:2px}
   canvas{width:100%;display:block}
 
-  .grid2{display:grid;grid-template-columns:1.15fr 1fr;gap:14px}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:14px;align-items:start}
+  .grid2.pie{grid-template-columns:.78fr 1.22fr}
+
+  .piebox{display:flex;gap:18px;align-items:center;flex-wrap:wrap;padding:4px 0 8px}
+  .piebox canvas{flex:0 0 auto}
+  .plist{flex:1;min-width:190px;display:flex;flex-direction:column;gap:7px}
+  .prow{display:flex;align-items:center;gap:9px;font-size:12.5px}
+  .prow .nm{flex:0 0 72px;color:var(--ink2)}
+  .prow .bar{flex:1;height:7px;border-radius:4px;background:#f0f2f5;overflow:hidden}
+  .prow .bar i{display:block;height:100%;border-radius:4px}
+  .prow .pv{flex:0 0 62px;text-align:right;font-variant-numeric:tabular-nums;font-weight:600}
+  .prow .pp{flex:0 0 52px;text-align:right;font-variant-numeric:tabular-nums;color:var(--ink3)}
+
   table{width:100%;border-collapse:collapse;font-size:12.5px;font-variant-numeric:tabular-nums}
-  th{text-align:right;color:var(--ink3);font-weight:500;padding:6px 8px;border-bottom:1px solid var(--line)}
+  th{text-align:right;color:var(--ink3);font-weight:500;padding:6px 7px;border-bottom:1px solid var(--line);white-space:nowrap}
   th:first-child{text-align:left}
-  td{text-align:right;padding:6px 8px;border-bottom:1px solid #f1f2f4}
+  td{text-align:right;padding:6px 7px;border-bottom:1px solid #f1f2f4}
   td:first-child{text-align:left;color:var(--ink2)}
   tbody tr:hover{background:#fafbfc}
-  .scroll{max-height:330px;overflow:auto}
+  .scroll{max-height:300px;overflow:auto}
   .empty{color:var(--ink3);text-align:center;padding:40px 0;font-size:13px}
-  @media(max-width:900px){
+  @media(max-width:980px){
     .cards{grid-template-columns:repeat(2,1fr)}
-    .grid2{grid-template-columns:1fr}
+    .grid2,.grid2.pie{grid-template-columns:1fr}
   }
 </style>
 </head>
@@ -68,23 +80,32 @@
 
   <div class="cards" id="cards"></div>
 
-  <div class="panel">
-    <div class="ptitle"><b>累计涨量走势</b><span>各自相对首次采样涨了多少，虚线为全场总量</span></div>
-    <div class="legend" id="legend"></div>
-    <canvas id="line" height="300"></canvas>
-  </div>
-
   <div class="grid2">
     <div class="panel">
-      <div class="ptitle"><b>每轮增量</b><span>相邻两次采样的差值，直观看谁在加速</span></div>
-      <canvas id="bar" height="260"></canvas>
+      <div class="ptitle"><b>总票数走势</b><span>相对首次采样的累计涨量</span></div>
+      <div class="legend" id="legend"></div>
+      <canvas id="line"></canvas>
     </div>
     <div class="panel">
-      <div class="ptitle"><b>增量构成</b><span>四人增量 ÷ 全场增量</span></div>
-      <canvas id="share" height="150"></canvas>
-      <div class="scroll" style="margin-top:10px">
+      <div class="ptitle"><b>每分钟涨幅</b><span>相邻两次采样之间新增的票数</span></div>
+      <div class="legend" id="legend2"></div>
+      <canvas id="gain"></canvas>
+    </div>
+  </div>
+
+  <div class="grid2 pie">
+    <div class="panel">
+      <div class="ptitle"><b>票数构成</b><span>各自占总票数的比例</span></div>
+      <div class="piebox">
+        <canvas id="pie"></canvas>
+        <div class="plist" id="plist"></div>
+      </div>
+    </div>
+    <div class="panel">
+      <div class="ptitle"><b>每轮明细</b><span>最近 40 次采样，各选手当轮新增</span></div>
+      <div class="scroll">
         <table>
-          <thead><tr><th>时间</th><th>Δ总</th><th>四人Δ</th><th>占比</th></tr></thead>
+          <thead><tr><th>时间</th><th>Δ总</th><th>白小纯</th><th>青稚</th><th>Paraboy</th><th>33Svan</th></tr></thead>
           <tbody id="tbody"></tbody>
         </table>
       </div>
@@ -100,10 +121,14 @@ const SERIES = [
   {key:'r2r', name:'33Svan', c:'#12a07a'},
   {key:'total', name:'总票数', c:'#8b5cf6'},
 ];
+const PKEYS = ['r1l','r1r','r2l','r2r'];
+const OTHER_C = '#c2c8d2';
 let DATA = [];
 
 const fmt = n => n==null ? '—' : n.toLocaleString('en-US');
 const pct = v => v==null ? '—' : v.toFixed(2)+'%';
+// 中文习惯的万单位，用于圆环中心
+const wan = n => n==null ? '—' : (n/10000).toFixed(1)+'万';
 
 function parseCSV(text){
   const lines = text.replace(/^\uFEFF/,'').trim().split(/\r?\n/);
@@ -113,18 +138,19 @@ function parseCSV(text){
     const num = x => { const v = parseInt(String(x).replace(/[^\d-]/g,'')); return isNaN(v)?null:v; };
     return {
       t: c[0], total:num(c[1]), r1l:num(c[2]), r1r:num(c[3]), r2l:num(c[4]), r2r:num(c[5]),
-      dTotal:num(c[6]), dSum:num(c[7]), share:c[8]===''||c[8]==null?null:parseFloat(c[8]),
     };
   }).filter(r=>r.total!=null);
 }
 
-// 把上界取成 1/1.5/2/2.5/3/4/5/6/8/10 × 10^n，刻度才会是整数
-function niceMax(v){
-  if(!(v>0)) return 1000;
-  const exp = Math.floor(Math.log10(v)), base = Math.pow(10, exp), n = v/base;
-  const steps = [1,1.5,2,2.5,3,4,5,6,8,10];
-  const mult = steps.find(s=>n<=s) || 10;
-  return mult*base;
+// Y 轴按 5 段均分，步长取 1/2/2.5/5/10 × 10^n，刻度才是 50k / 100k 这种整数
+function niceAxis(v, div){
+  const D = div || 5;
+  if(!(v>0)) return {hi:D*200, step:200, div:D};
+  const raw = v/D;
+  const exp = Math.floor(Math.log10(raw)), base = Math.pow(10, exp), n = raw/base;
+  const mult = [1,2,2.5,5,10].find(s=>n<=s+1e-9) || 10;
+  const step = mult*base;
+  return {hi:step*D, step, div:D};
 }
 
 // 横轴标签：跨度小于 40 分钟时精确到秒，否则只到分
@@ -143,15 +169,42 @@ function pickIdx(len, n){
   return out;
 }
 
-function drawLine(cv){
+function setup(cv, H){
   const dpr = window.devicePixelRatio||1;
-  const W = cv.clientWidth, H = 300;
+  const W = cv.clientWidth || cv.parentElement.clientWidth;
+  cv.style.height = H+'px';
   cv.width = W*dpr; cv.height = H*dpr;
-  const g = cv.getContext('2d'); g.scale(dpr,dpr); g.clearRect(0,0,W,H);
+  const g = cv.getContext('2d');
+  g.setTransform(1,0,0,1,0,0);
+  g.scale(dpr,dpr); g.clearRect(0,0,W,H);
+  return {g, W, H};
+}
+
+function hint(g, W, H, text){
+  g.fillStyle='#9aa1ad'; g.font='13px sans-serif'; g.textAlign='center';
+  g.fillText(text, W/2, H/2);
+}
+
+// 画网格 + 坐标映射。ax = {hi, step, div}
+function drawSeries(g, W, H, pad, xs, ax){
+  const ih = H-pad.t-pad.b, iw = W-pad.l-pad.r;
+  const X = i => pad.l + (xs.length===1 ? iw/2 : xs[i]/Math.max(xs[xs.length-1],1)*iw);
+  const Y = v => pad.t + ih - v/ax.hi*ih;
+
+  g.strokeStyle='#eef0f3'; g.lineWidth=1;
+  g.font='11px ui-monospace,monospace'; g.fillStyle='#9aa1ad'; g.textAlign='right';
+  for(let i=0;i<=ax.div;i++){
+    const v = ax.step*i, y = Y(v);
+    g.beginPath(); g.moveTo(pad.l,y); g.lineTo(W-pad.r,y); g.stroke();
+    g.fillText(v>=1000 ? (v/1000).toFixed(v%1000?1:0)+'k' : Math.round(v), pad.l-8, y+4);
+  }
+  return {X, Y};
+}
+
+function drawLine(cv){
+  const {g, W, H} = setup(cv, 300);
   const pad = {l:62,r:14,t:12,b:26};
-  const iw = W-pad.l-pad.r, ih = H-pad.t-pad.b;
-  if(DATA.length < 2){ g.fillStyle='#9aa1ad'; g.font='13px sans-serif'; g.textAlign='center';
-    g.fillText('至少需要 2 次采样才能画曲线，等下一轮…', W/2, H/2); return; }
+  if(DATA.length < 2){ hint(g,W,H,'至少需要 2 次采样才能画曲线，等下一轮…'); return; }
 
   // 画的是相对首次采样的涨量，不是绝对票数 —— 500 万基数上看不出几千的变化
   const base = DATA[0];
@@ -160,18 +213,12 @@ function drawLine(cv){
 
   let hi = 0;
   DATA.forEach(r=>keys.forEach(k=>{ const d=delta(r,k); if(d!=null) hi=Math.max(hi,d); }));
-  hi = niceMax(Math.max(hi*1.12, 1000));
+  const ax = niceAxis(Math.max(hi*1.06, 1000));
 
-  const X = i => pad.l + (DATA.length===1?iw/2:i/(DATA.length-1)*iw);
-  const Y = v => pad.t + ih - v/hi*ih;
+  const xs = DATA.map((_,i)=>i);
+  const {X, Y} = drawSeries(g, W, H, pad, xs, ax);
 
-  g.strokeStyle='#eef0f3'; g.lineWidth=1;
-  g.font='11px ui-monospace,monospace'; g.fillStyle='#9aa1ad'; g.textAlign='right';
-  for(let i=0;i<=4;i++){
-    const v = hi*i/4, y = Y(v);
-    g.beginPath(); g.moveTo(pad.l,y); g.lineTo(W-pad.r,y); g.stroke();
-    g.fillText(v>=1000 ? (v/1000).toFixed(v%1000?1:0)+'k' : Math.round(v), pad.l-8, y+4);
-  }
+  // 横轴
   g.textAlign='center';
   const show = pickIdx(DATA.length, Math.max(3, Math.min(6, Math.floor(W/120))));
   const idxs = [...show].sort((a,b)=>a-b);
@@ -196,67 +243,123 @@ function drawLine(cv){
   });
 }
 
-function drawBar(cv){
-  const dpr=window.devicePixelRatio||1;
-  const W=cv.clientWidth, H=260;
-  cv.width=W*dpr; cv.height=H*dpr;
-  const g=cv.getContext('2d'); g.scale(dpr,dpr); g.clearRect(0,0,W,H);
-  const rows = DATA.slice(1).map((r,i)=>({
-    t:r.t, d:{r1l:r.r1l-DATA[i].r1l, r1r:r.r1r-DATA[i].r1r,
-              r2l:r.r2l-DATA[i].r2l, r2r:r.r2r-DATA[i].r2r}
-  }));
-  if(!rows.length){ g.fillStyle='#9aa1ad'; g.font='13px sans-serif'; g.textAlign='center';
-    g.fillText('等下一次采样…', W/2, H/2); return; }
-  const pad={l:44,r:12,t:12,b:26};
-  const iw=W-pad.l-pad.r, ih=H-pad.t-pad.b;
-  const maxV = niceMax(Math.max(100, ...rows.flatMap(r=>Object.values(r.d).map(v=>v||0))));
-  const keys=['r1l','r1r','r2l','r2r'];
-  const gw = iw/Math.max(rows.length,1), bw = Math.min(gw*0.72/keys.length, 16);
-
-  g.strokeStyle='#eef0f3'; g.lineWidth=1; g.font='11px ui-monospace,monospace';
-  g.fillStyle='#9aa1ad'; g.textAlign='right';
-  for(let i=0;i<=4;i++){ const y=pad.t+ih-ih*i/4;
-    g.beginPath(); g.moveTo(pad.l,y); g.lineTo(W-pad.r,y); g.stroke();
-    g.fillText(Math.round(maxV*i/4).toLocaleString(), pad.l-6, y+4); }
-
-  rows.forEach((r,i)=>{
-    keys.forEach((k,j)=>{
-      const v=r.d[k]; if(v==null) return;
-      const s=SERIES.find(x=>x.key===k);
-      const x=pad.l+gw*i+gw*0.14+bw*j, h=Math.max(1, v/maxV*ih);
-      g.fillStyle=s.c; g.globalAlpha=.9;
-      g.beginPath(); g.roundRect(x, pad.t+ih-h, bw, h, 2); g.fill();
-      g.globalAlpha=1;
-    });
-  });
-  g.fillStyle='#9aa1ad'; g.textAlign='center';
-  const show = pickIdx(rows.length, Math.max(3, Math.min(7, Math.floor(W/110))));
-  const idxs = [...show].sort((a,b)=>a-b);
-  idxs.forEach((i,pos)=>{ g.textAlign = pos===0?'left' : pos===idxs.length-1?'right':'center';
-    g.fillText(axisLabel(rows[i].t), pad.l+gw*i+gw/2, H-8); });
-  g.textAlign='center';
+// 相邻两次采样的差值 = 这一分钟涨了多少票
+function gains(){
+  const out = [];
+  for(let i=1;i<DATA.length;i++){
+    const a = DATA[i-1], b = DATA[i];
+    const o = {t:b.t};
+    [...PKEYS,'total'].forEach(k=>{ o[k] = (a[k]==null||b[k]==null) ? null : b[k]-a[k]; });
+    out.push(o);
+  }
+  return out;
 }
 
-function drawShare(cv){
-  const dpr=window.devicePixelRatio||1, W=cv.clientWidth, H=150;
-  cv.width=W*dpr; cv.height=H*dpr;
-  const g=cv.getContext('2d'); g.scale(dpr,dpr); g.clearRect(0,0,W,H);
-  const last = [...DATA].reverse().find(r=>r.share!=null);
-  if(!last){ g.fillStyle='#9aa1ad'; g.font='13px sans-serif'; g.textAlign='center';
-    g.fillText('等下一次采样…', W/2, H/2); return; }
+function drawGain(cv){
+  const {g, W, H} = setup(cv, 300);
+  const pad = {l:52,r:14,t:12,b:26};
+  const rows = gains();
+  if(!rows.length){ hint(g,W,H,'等下一次采样…'); return; }
 
-  const v = Math.max(0, Math.min(120, last.share));
-  const cx=W/2, cy=H/2+8, r=52, a0=Math.PI, a1=2*Math.PI;
-  g.lineWidth=13; g.lineCap='round';
-  g.beginPath(); g.arc(cx,cy,r,a0,a1); g.strokeStyle='#eef0f3'; g.stroke();
-  const col = v>95 ? '#d92b2b' : v>80 ? '#e8a020' : '#12a07a';
-  g.beginPath(); g.arc(cx,cy,r,a0,a0+(a1-a0)*Math.min(v,100)/100); g.strokeStyle=col; g.stroke();
+  // 总票数的增量约等于四人之和，放同一根轴上会把四条线压到底部，这里只画选手
+  const keys = PKEYS;
+  let peak = 0;
+  rows.forEach(r=>keys.forEach(k=>{ if(r[k]!=null) peak=Math.max(peak,r[k]); }));
+  const ax = niceAxis(Math.max(peak*1.08, 100));
 
-  g.fillStyle='#181b21'; g.textAlign='center';
-  g.font='600 22px ui-monospace,monospace';
-  g.fillText(last.share.toFixed(1)+'%', cx, cy-4);
+  const xs = rows.map((_,i)=>i);
+  const {X, Y} = drawSeries(g, W, H, pad, xs, ax);
+
+  g.textAlign='center';
+  const show = pickIdx(rows.length, Math.max(3, Math.min(6, Math.floor(W/120))));
+  const idxs = [...show].sort((a,b)=>a-b);
+  idxs.forEach((i,pos)=>{ g.textAlign = pos===0?'left' : pos===idxs.length-1?'right':'center';
+    g.fillText(axisLabel(rows[i].t), X(i), H-8); });
+  g.textAlign='center';
+
+  keys.forEach(k=>{
+    const s = SERIES.find(x=>x.key===k);
+    const isTotal = k==='total';
+    g.beginPath(); g.strokeStyle=s.c; g.lineWidth=isTotal?1.4:2; g.lineJoin='round';
+    if(isTotal){ g.setLineDash([4,4]); g.globalAlpha=.6; }
+    let started=false;
+    rows.forEach((r,i)=>{ const v=r[k]; if(v==null) return;
+      const x=X(i), y=Y(Math.max(0,v));
+      started ? g.lineTo(x,y) : (g.moveTo(x,y), started=true);
+    });
+    g.stroke(); g.setLineDash([]); g.globalAlpha=1;
+    const last = [...rows].reverse().find(r=>r[k]!=null);
+    if(last){ const i = rows.lastIndexOf(last);
+      g.beginPath(); g.arc(X(i),Y(Math.max(0,last[k])),3.2,0,7); g.fillStyle=s.c; g.fill();
+      g.strokeStyle='#fff'; g.lineWidth=1.5; g.stroke(); }
+  });
+}
+
+// 五个板块的圆环：前四名各自占比 + 其他
+function pieData(){
+  const last = DATA[DATA.length-1];
+  if(!last) return null;
+  const parts = PKEYS.map(k=>{
+    const s = SERIES.find(x=>x.key===k);
+    return {name:s.name, c:s.c, v:last[k]||0};
+  });
+  const sum4 = parts.reduce((a,b)=>a+b.v,0);
+  const other = Math.max(0, (last.total||0) - sum4);
+  parts.push({name:'其他', c:OTHER_C, v:other});
+  const tot = parts.reduce((a,b)=>a+b.v,0) || 1;
+  parts.forEach(p=>p.p = p.v/tot*100);
+  return {parts, tot};
+}
+
+function drawPie(cv){
+  const S = 186;
+  const dpr = window.devicePixelRatio||1;
+  cv.style.width = S+'px'; cv.style.height = S+'px';
+  cv.width = S*dpr; cv.height = S*dpr;
+  const g = cv.getContext('2d');
+  g.setTransform(1,0,0,1,0,0); g.scale(dpr,dpr); g.clearRect(0,0,S,S);
+
+  const d = pieData();
+  if(!d){ return; }
+  const cx = S/2, cy = S/2, r = S/2-6, inner = r*0.615;
+
+  let a = -Math.PI/2;
+  const gap = 0.018;   // 相邻板块之间留一点缝，边界更清楚
+  d.parts.forEach(p=>{
+    const sweep = p.v/d.tot*Math.PI*2;
+    if(sweep <= 0) return;
+    const a0 = a + gap/2, a1 = a + sweep - gap/2;
+    if(a1 > a0){
+      g.beginPath();
+      g.arc(cx, cy, r, a0, a1);
+      g.arc(cx, cy, inner, a1, a0, true);
+      g.closePath();
+      g.fillStyle = p.c; g.fill();
+    }
+    a += sweep;
+  });
+
+  // 中心：总票数
+  g.textAlign='center'; g.fillStyle='#181b21';
+  g.font='600 19px ui-monospace,monospace';
+  g.fillText(wan(d.tot), cx, cy+1);
   g.font='11px sans-serif'; g.fillStyle='#9aa1ad';
-  g.fillText('四人占全场新增', cx, cy+14);
+  g.fillText('总票数', cx, cy+17);
+}
+
+function renderPieList(){
+  const d = pieData();
+  const el = document.getElementById('plist');
+  if(!d){ el.innerHTML='<div class="empty">暂无数据</div>'; return; }
+  const mx = Math.max(...d.parts.map(p=>p.p));
+  el.innerHTML = d.parts.map(p=>`
+    <div class="prow">
+      <span class="sw" style="background:${p.c}"></span>
+      <span class="nm">${p.name}</span>
+      <span class="bar"><i style="width:${(p.p/mx*100).toFixed(1)}%;background:${p.c}"></i></span>
+      <span class="pp">${p.p.toFixed(1)}%</span>
+      <span class="pv">${fmt(p.v)}</span>
+    </div>`).join('');
 }
 
 function render(){
@@ -272,21 +375,27 @@ function render(){
     </div>`;
   }).join('');
 
-  document.getElementById('legend').innerHTML = SERIES.map(s=>
+  const legendHTML = SERIES.map(s=>
+    `<div class="lg"><span class="sw" style="background:${s.c}"></span>${s.name}</div>`).join('');
+  document.getElementById('legend').innerHTML = legendHTML;
+  // 涨幅图不画总票数，图例也跟着少一项
+  document.getElementById('legend2').innerHTML = SERIES.filter(s=>s.key!=='total').map(s=>
     `<div class="lg"><span class="sw" style="background:${s.c}"></span>${s.name}</div>`).join('');
 
-  const tb = document.getElementById('tbody');
-  const rows = DATA.slice().reverse().slice(0,40);
-  tb.innerHTML = rows.length ? rows.map(r=>`<tr>
+  const rows = gains().reverse().slice(0,40);
+  document.getElementById('tbody').innerHTML = rows.length ? rows.map(r=>`<tr>
       <td>${String(r.t).slice(5)}</td>
-      <td>${r.dTotal==null?'—':(r.dTotal>=0?'+':'')+fmt(r.dTotal)}</td>
-      <td>${r.dSum==null?'—':(r.dSum>=0?'+':'')+fmt(r.dSum)}</td>
-      <td style="color:${r.share>95?'#d92b2b':r.share>80?'#e8a020':'#5f6673'}">${pct(r.share)}</td>
-    </tr>`).join('') : '<tr><td colspan="4" class="empty">暂无数据</td></tr>';
+      <td>${r.total==null?'—':(r.total>=0?'+':'')+fmt(r.total)}</td>
+      <td style="color:var(--p1)">${r.r1l==null?'—':(r.r1l>=0?'+':'')+fmt(r.r1l)}</td>
+      <td style="color:var(--p2)">${r.r1r==null?'—':(r.r1r>=0?'+':'')+fmt(r.r1r)}</td>
+      <td style="color:var(--p3)">${r.r2l==null?'—':(r.r2l>=0?'+':'')+fmt(r.r2l)}</td>
+      <td style="color:var(--p4)">${r.r2r==null?'—':(r.r2r>=0?'+':'')+fmt(r.r2r)}</td>
+    </tr>`).join('') : '<tr><td colspan="6" class="empty">暂无数据</td></tr>';
 
   drawLine(document.getElementById('line'));
-  drawBar(document.getElementById('bar'));
-  drawShare(document.getElementById('share'));
+  drawGain(document.getElementById('gain'));
+  drawPie(document.getElementById('pie'));
+  renderPieList();
 
   const dot = document.getElementById('dot'), txt = document.getElementById('liveTxt');
   if(DATA.length){

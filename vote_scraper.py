@@ -49,14 +49,60 @@ STOP_FILE = DATA_DIR / ".stop"
 CONFIG_PATH = DATA_DIR / "scraper_config.json"
 
 
+def _bundle_dir():
+    """打包成 exe 后，内置资源（adb 等）被解压到 PyInstaller 的临时目录"""
+    return Path(getattr(sys, "_MEIPASS", "")) if getattr(sys, "frozen", False) else None
+
+
+ADB_FILES = ("adb.exe", "AdbWinApi.dll", "AdbWinUsbApi.dll")
+
+
+def _install_bundled_adb():
+    """把 exe 内置的 adb 和修复脚本释放到程序目录，返回 adb.exe 路径；没有内置则返回 None。
+
+    释放到程序目录而不是留在临时解压目录：adb 会常驻一个后台 daemon，
+    临时目录在主程序退出后被清空，daemon 就指向了不存在的路径。
+    """
+    b = _bundle_dir()
+    if not b:
+        return None
+
+    # 华为/荣耀设备的 ADB 驱动修复脚本，一并放出来方便用户直接双击
+    tools_src = b / "tools"
+    if tools_src.is_dir():
+        tools_dst = DATA_DIR / "tools"
+        tools_dst.mkdir(parents=True, exist_ok=True)
+        for f in tools_src.iterdir():
+            if f.is_file():
+                d = tools_dst / f.name
+                if not (d.is_file() and d.stat().st_size == f.stat().st_size):
+                    shutil.copy2(f, d)
+
+    src = b / "platform-tools"
+    if not (src / "adb.exe").is_file():
+        return None
+    dst = DATA_DIR / "platform-tools"
+    dst.mkdir(parents=True, exist_ok=True)
+    for name in ADB_FILES:
+        s, d = src / name, dst / name
+        if s.is_file() and not (d.is_file() and d.stat().st_size == s.stat().st_size):
+            shutil.copy2(s, d)
+    return dst / "adb.exe"
+
+
 def find_adb():
-    """按优先级查找 adb：环境变量 → PATH → Android SDK 默认位置 → 程序同级目录"""
+    """按优先级查找 adb：环境变量 → 内置 → PATH → Android SDK → 程序同级目录"""
     exe_dir = Path(sys.executable).resolve().parent
 
-    cands = []
     env = os.environ.get("ADB_PATH")
-    if env:
-        cands.append(env)
+    if env and Path(env).is_file():
+        return env
+
+    bundled = _install_bundled_adb()
+    if bundled:
+        return str(bundled)
+
+    cands = []
     w = shutil.which("adb")
     if w:
         cands.append(w)
@@ -135,7 +181,15 @@ class Adb:
         return [ADB] + (["-s", self.serial] if self.serial else [])
 
     def run(self, *args, timeout=30, binary=False):
-        r = subprocess.run(self._args() + list(args), capture_output=True, timeout=timeout)
+        try:
+            r = subprocess.run(self._args() + list(args), capture_output=True, timeout=timeout)
+        except FileNotFoundError:
+            raise RuntimeError(
+                "找不到 adb。三种解决办法：\n"
+                "  1. 下载 Android SDK Platform-Tools，把整个 platform-tools 文件夹放到本程序同级目录\n"
+                "  2. 把 platform-tools 加进系统 PATH\n"
+                "  3. 设置环境变量 ADB_PATH 指向 adb.exe 的完整路径"
+            )
         if r.returncode != 0:
             err = (r.stderr or b"").decode("utf-8", "ignore").strip()
             raise RuntimeError("adb %s 失败: %s" % (" ".join(args), err))
@@ -144,14 +198,25 @@ class Adb:
     def ensure_device(self):
         out = self.run("devices")
         lines = [l.split() for l in out.splitlines()[1:] if l.strip()]
+        lines = [p for p in lines if len(p) > 1 and p[1] == "device"]
         if not lines:
-            raise RuntimeError("没有已连接的设备。")
+            raise RuntimeError(
+                "没有已连接的设备。逐项检查：\n"
+                "  1. 手机「开发者选项」里「USB 调试」已打开\n"
+                "  2. 数据线支持传输（只能充电的线不行），插紧\n"
+                "  3. 手机上弹出的「允许 USB 调试」已点允许\n"
+                "  4. 华为/荣耀机型如果前三条都对、列表仍然为空，\n"
+                "     双击本目录下的 tools\\fix_adb_driver.bat 修复驱动，然后重试"
+            )
         if self.serial is None:
-            self.serial = lines[0][0]
+            # 优先选 USB 直连（序列号是纯设备号），无线调试的条目会带 _adb-tls-connect 这类后缀
+            def rank(p):
+                s = p[0]
+                wireless = ("_adb-tls" in s) or ("." in s) or (":" in s)
+                return (wireless, s)
+            self.serial = sorted(lines, key=rank)[0][0]
         for parts in lines:
             if parts[0] == self.serial:
-                if len(parts) > 1 and parts[1] != "device":
-                    raise RuntimeError("设备状态是 %s，不接受调试命令。" % parts[1])
                 return self.serial
         raise RuntimeError("找不到设备 %s" % self.serial)
 
@@ -172,9 +237,32 @@ class Adb:
     def back(self):
         self.run("shell", "input", "keyevent", "KEYCODE_BACK")
 
+    def _try(self, *args):
+        """执行但不因失败抛错，用于尽力而为的辅助命令"""
+        try:
+            self.run(*args, timeout=15)
+            return True
+        except Exception:
+            return False
+
     def wake(self):
         self.run("shell", "input", "keyevent", "KEYCODE_WAKEUP")
-        self.run("shell", "svc", "power", "stayon", "true")
+        self._try("shell", "wm", "dismiss-keyguard")
+        # 只在上锁时才滑动，避免在活动页面上误触把页面滚走
+        if self.keyguard_showing():
+            try:
+                w, h = self.size()
+                self._try("shell", "input", "swipe", str(w // 2), str(int(h * 0.85)),
+                          str(w // 2), str(int(h * 0.35)), "260")
+            except Exception:
+                pass
+        self._try("shell", "svc", "power", "stayon", "true")
+        # 关掉自动息屏，挂机采集期间屏幕必须一直亮着
+        self._try("shell", "settings", "put", "system", "screen_off_timeout", "1800000")
+
+    def keyguard_showing(self):
+        out = self.run("shell", "dumpsys", "window", timeout=20)
+        return "isKeyguardShowing=true" in out
 
     def top_activity(self):
         out = self.run("shell", "dumpsys", "activity", "activities", timeout=20)
@@ -182,10 +270,21 @@ class Adb:
         return (m.group(1), m.group(2)) if m else (None, None)
 
     def screencap(self):
-        data = self.run("exec-out", "screencap", "-p", timeout=40, binary=True)
-        if len(data) < 2000:
-            raise RuntimeError("截屏数据异常，只有 %d 字节" % len(data))
-        return Image.open(io.BytesIO(data)).convert("RGB")
+        for attempt in (1, 2):
+            data = self.run("exec-out", "screencap", "-p", timeout=40, binary=True)
+            if len(data) >= 2000:
+                return Image.open(io.BytesIO(data)).convert("RGB")
+            # 锁屏状态下部分机型（华为等）会直接拒绝截屏，唤醒后再试一次
+            if attempt == 1:
+                self.wake()
+                time.sleep(0.8)
+        if self.keyguard_showing():
+            raise RuntimeError(
+                "截屏失败：手机处于锁屏状态。\n"
+                "  华为等机型在锁屏时会拒绝截屏，ADB 也无法绕过密码锁。\n"
+                "  请手动解锁手机并保持屏幕点亮，下一轮会自动恢复。"
+            )
+        raise RuntimeError("截屏失败，返回内容异常（%d 字节）" % len(data))
 
 
 # ──────────────────────────── 画面指纹 ────────────────────────────
@@ -301,10 +400,12 @@ class Scraper:
         self.save_mode = save_mode
         self.last_images = None
         self.dev = Adb()
+        # 先确定设备再读分辨率：同时插着线又开着无线调试时，不带 -s 的 adb 命令会拒绝执行
+        serial = self.dev.ensure_device()
         self.w, self.h = self.dev.size()
         self.ocr = Ocr()
         print("设备: %s   分辨率: %dx%d   留档模式: %s" % (
-            self.dev.ensure_device(), self.w, self.h, save_mode))
+            serial, self.w, self.h, save_mode))
 
     def pt(self, pair):
         return pair[0] * self.w / BASE_W, pair[1] * self.h / BASE_H
@@ -403,6 +504,7 @@ class Scraper:
 
     def run(self, rounds=0, dry_run=False):
         n = 0
+        fails = 0
         t_next = time.monotonic()
         while True:
             n += 1
@@ -433,7 +535,18 @@ class Scraper:
             except KeyboardInterrupt:
                 raise
             except Exception as e:
+                fails += 1
                 print("[%s] 本轮失败: %s" % (datetime.now().strftime("%H:%M:%S"), e))
+                if fails >= 3:
+                    print("")
+                    print("  !! 已连续 %d 轮失败。" % fails)
+                    print("     最常见的原因是手机锁屏 —— 请解锁手机，别让它自动息屏。")
+                    print("     其次是数据线松动，拔插一次即可。程序每轮都会自动重试，不用重启。")
+                    print("")
+            else:
+                if fails >= 3:
+                    print("[%s] 已恢复" % datetime.now().strftime("%H:%M:%S"))
+                fails = 0
 
             if dry_run:
                 break
